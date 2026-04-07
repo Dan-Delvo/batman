@@ -45,6 +45,15 @@ type DailyLogDetails = {
     time_out: string | null;
     tasks_done: string | null;
 };
+type DailyLogPrefill = {
+    time_in: string | null;
+    time_out: string | null;
+    source: 'default' | 'previous' | null;
+};
+type HolidayDetails = {
+    name: string;
+    type: 'regular' | 'special_non_working' | string;
+};
 type DashboardStats = {
     totalHours: number;
     requiredHours: number;
@@ -53,12 +62,15 @@ type DashboardStats = {
     weeklyChange: string | null;
     weeklyTrend: 'up' | 'down' | 'neutral';
     daysLeft: number;
+    expectedFinishDate: string | null;
 };
 
 const page = usePage<{
     dailyLogDates?: string[];
     dailyLogs?: DailyLogItem[];
     dailyLogsByDate?: Record<string, DailyLogDetails>;
+    dailyLogPrefill?: DailyLogPrefill;
+    holidaysByDate?: Record<string, HolidayDetails>;
     dashboardStats?: DashboardStats;
 }>();
 
@@ -85,17 +97,29 @@ const localLoggedDates = ref<Record<string, boolean>>(
 const localDailyLogsByDate = ref<Record<string, DailyLogDetails>>({
     ...(page.props.dailyLogsByDate ?? {}),
 });
+const holidaysByDate = computed<Record<string, HolidayDetails>>(() => page.props.holidaysByDate ?? {});
+const dailyLogPrefill = computed<DailyLogPrefill>(() => {
+    return (
+        page.props.dailyLogPrefill ?? {
+            time_in: null,
+            time_out: null,
+            source: null,
+        }
+    );
+});
 
 const logForm = useForm<{
     log_date: string;
     time_in: string;
     time_out: string;
     tasks_done: string;
+    save_as_default: boolean;
 }>({
     log_date: '',
     time_in: '',
     time_out: '',
     tasks_done: '',
+    save_as_default: false,
 });
 
 const stats = computed<DashboardStats>(() => {
@@ -108,9 +132,21 @@ const stats = computed<DashboardStats>(() => {
             weeklyChange: null,
             weeklyTrend: 'neutral',
             daysLeft: 0,
+            expectedFinishDate: null,
         }
     );
 });
+
+const formatShortDate = (isoDate: string | null) => {
+    if (!isoDate) return 'TBD';
+
+    const date = new Date(`${isoDate}T00:00:00`);
+    return new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+    }).format(date);
+};
 
 const toIsoDate = (date: DateValue) => {
     const month = String(date.month).padStart(2, '0');
@@ -130,6 +166,15 @@ const formatLongDate = (isoDate: string) => {
 };
 
 const isLoggedDate = (day: DateValue) => Boolean(localLoggedDates.value[toIsoDate(day)]);
+const getHoliday = (day: DateValue) => holidaysByDate.value[toIsoDate(day)];
+const selectedHoliday = computed(() => holidaysByDate.value[selectedDateIso.value] ?? null);
+const getHolidayChip = (name: string) =>
+    name
+        .split(/\s+/)
+        .map((part) => part[0])
+        .join('')
+        .slice(0, 3)
+        .toUpperCase();
 
 const isDateUnavailable = (day: DateValue) => {
     const dayOfWeek = new Date(day.year, day.month - 1, day.day).getDay();
@@ -141,12 +186,15 @@ const isDateUnavailable = (day: DateValue) => {
 
 watch(selectedDate, (value) => {
     if (!value) return;
+
     selectedDateIso.value = toIsoDate(value);
     const existingLog = localDailyLogsByDate.value[selectedDateIso.value];
+
     logForm.log_date = selectedDateIso.value;
-    logForm.time_in = existingLog?.time_in ?? '';
-    logForm.time_out = existingLog?.time_out ?? '';
+    logForm.time_in = existingLog?.time_in ?? dailyLogPrefill.value.time_in ?? '';
+    logForm.time_out = existingLog?.time_out ?? dailyLogPrefill.value.time_out ?? '';
     logForm.tasks_done = existingLog?.tasks_done ?? '';
+    logForm.save_as_default = false;
     logForm.clearErrors();
     isDialogOpen.value = true;
 });
@@ -218,9 +266,9 @@ const saveDailyLog = () => {
                     <MarqueeSeparator class="text-primary-foreground/50">★</MarqueeSeparator>
                 </Marquee>
         </div>
-        <div class="grid auto-rows-min gap-4 grid-cols-4">
+        <div class="grid auto-rows-min grid-cols-1 gap-4 md:grid-cols-6">
 
-            <div class="relative col-span-3 flex">
+            <div class="relative col-span-1 flex md:col-span-4">
                 <StatCard
                     title="Target Hours"
                     :value="`${stats.totalHours}/${stats.requiredHours}`"
@@ -231,7 +279,7 @@ const saveDailyLog = () => {
                     class="h-full w-full"
                 />
             </div>
-            <div class="relative col-span-1 flex">
+            <div class="relative col-span-1 flex md:col-span-1">
                 <StatCard
                     title="This week"
                     :value="`${stats.weeklyHours} hrs`"
@@ -239,6 +287,15 @@ const saveDailyLog = () => {
                     :trend="stats.weeklyTrend"
                     :icon="CalendarClock"
                     color="primary"
+                    class="h-full w-full"
+                />
+            </div>
+            <div class="relative col-span-1 flex md:col-span-1">
+                <StatCard
+                    title="Expected finish"
+                    :value="formatShortDate(stats.expectedFinishDate)"
+                    :icon="CalendarClock"
+                    color="warning"
                     class="h-full w-full"
                 />
             </div>
@@ -261,18 +318,32 @@ const saveDailyLog = () => {
                         <CalendarCellTrigger
                             :day="day"
                             :month="month"
+                            :title="getHoliday(day)?.name"
                             :class="
                                 cn(
-                                    'h-full w-full rounded-none border-0 bg-transparent font-bold text-foreground shadow-none transition-colors duration-150 hover:bg-accent/40 hover:translate-x-0 hover:translate-y-0',
+                                    'flex h-full w-full flex-col items-start justify-start rounded-none border-0 bg-transparent px-2 py-1 font-bold text-foreground shadow-none transition-colors duration-150 hover:bg-accent/40 hover:translate-x-0 hover:translate-y-0',
                                     'data-[outside-view]:text-muted-foreground data-[outside-view]:opacity-70',
                                     'data-[today]:bg-accent data-[today]:text-accent-foreground',
                                     'data-[selected]:bg-primary data-[selected]:text-primary-foreground',
                                     'data-[unavailable]:pointer-events-none data-[unavailable]:opacity-45 data-[unavailable]:bg-muted/50 data-[unavailable]:text-muted-foreground',
-                                    isLoggedDate(day) &&
-                                        'bg-success/25 text-success-foreground'
+                                    isLoggedDate(day) && 'bg-success/25 text-success-foreground',
+                                    getHoliday(day)?.type === 'regular' &&
+                                        'bg-amber-200/60 text-amber-950 hover:bg-amber-200',
+                                    getHoliday(day)?.type !== 'regular' &&
+                                        getHoliday(day) &&
+                                        'bg-sky-200/60 text-sky-950 hover:bg-sky-200',
+                                    isLoggedDate(day) && getHoliday(day) && 'ring-2 ring-foreground/70 ring-inset'
                                 )
                             "
-                        />
+                        >
+                            <span class="text-sm leading-none">{{ day.day }}</span>
+                            <span
+                                v-if="getHoliday(day)"
+                                class="mt-1 line-clamp-2 text-[10px] font-semibold uppercase leading-tight opacity-85"
+                            >
+                                {{ getHolidayChip(getHoliday(day)?.name ?? '') }}
+                            </span>
+                        </CalendarCellTrigger>
                     </template>
                 </Calendar>
                 </CardContent>
@@ -286,7 +357,12 @@ const saveDailyLog = () => {
                         {{ formatLongDate(selectedDateIso) }}
                     </DialogTitle>
                     <DialogDescription>
-                        Fill out your daily internship log.
+                        <span v-if="selectedHoliday">
+                            {{ selectedHoliday.name }} • {{ selectedHoliday.type === 'regular' ? 'Regular holiday' : 'Special non-working holiday' }}
+                        </span>
+                        <span v-else>
+                            Fill out your daily internship log.
+                        </span>
                     </DialogDescription>
                 </DialogHeader>
 
@@ -306,6 +382,21 @@ const saveDailyLog = () => {
                             <InputError :message="logForm.errors.time_out" />
                         </div>
                     </div>
+
+                    <p v-if="!localDailyLogsByDate[selectedDateIso] && dailyLogPrefill.source" class="text-xs text-muted-foreground">
+                        {{ dailyLogPrefill.source === 'default' ? 'Autofilled from your default schedule.' : 'Autofilled from your previous log.' }}
+                        You can still edit before saving.
+                    </p>
+
+                    <label class="flex items-center gap-2 text-sm">
+                        <input
+                            v-model="logForm.save_as_default"
+                            type="checkbox"
+                            class="h-4 w-4 rounded border-input"
+                        />
+                        Save current time in and out as my default
+                    </label>
+                    <InputError :message="logForm.errors.save_as_default" />
 
                     <div class="space-y-2">
                         <Label for="tasks_done">What did you do today?</Label>

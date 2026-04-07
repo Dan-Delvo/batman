@@ -3,6 +3,7 @@
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\DailyLogController;
 use App\Models\DailyLog;
+use App\Services\PhilippineHolidayService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -55,11 +56,17 @@ Route::middleware(['auth', 'verified'])->group(function () {
         $lastWeekLogs = collect();
         $dailyLogDates = [];
         $dailyLogsByDate = [];
+        $lastLoggedTimes = null;
 
         if (Schema::hasTable('daily_logs')) {
             $allLogs = DailyLog::query()
                 ->where('user_id', $user->id)
                 ->get();
+
+            $lastLoggedTimes = $allLogs
+                ->filter(fn (DailyLog $log) => $log->time_in || $log->time_out)
+                ->sortByDesc('log_date')
+                ->first();
 
             // Always derive total consumed hours from logs to keep dashboard + users.hrs in sync.
             $totalHours = round($computeHours($allLogs), 1);
@@ -119,10 +126,57 @@ Route::middleware(['auth', 'verified'])->group(function () {
             : 0;
 
         $daysLeft = (int) ceil($remainingHours / 8);
+        $holidayService = app(PhilippineHolidayService::class);
+        $holidaysByDate = $holidayService
+            ->getForYears($now->year - 1, $now->year + 3)
+            ->mapWithKeys(fn (array $holiday) => [
+                $holiday['date'] => [
+                    'name' => $holiday['name'],
+                    'type' => $holiday['type'],
+                ],
+            ])
+            ->all();
+
+        $expectedFinishDate = null;
+        if ($remainingHours <= 0) {
+            $expectedFinishDate = $now->toDateString();
+        } elseif ($daysLeft > 0) {
+            $remainingWorkDays = $daysLeft;
+            $cursor = $now->copy()->startOfDay();
+
+            while ($remainingWorkDays > 0) {
+                $iso = $cursor->toDateString();
+                $isHoliday = isset($holidaysByDate[$iso]);
+
+                if ($cursor->isWeekday() && ! $isHoliday) {
+                    $remainingWorkDays--;
+                    if ($remainingWorkDays === 0) {
+                        $expectedFinishDate = $iso;
+                        break;
+                    }
+                }
+
+                $cursor->addDay();
+            }
+        }
+
+        $hasDefaultTimeColumns = Schema::hasColumns('users', ['default_time_in', 'default_time_out']);
+        $defaultTimeIn = $hasDefaultTimeColumns ? $user->default_time_in : null;
+        $defaultTimeOut = $hasDefaultTimeColumns ? $user->default_time_out : null;
+        $hasDefaultTimes = (bool) ($defaultTimeIn || $defaultTimeOut);
+        $prefillSource = $hasDefaultTimes
+            ? 'default'
+            : ($lastLoggedTimes ? 'previous' : null);
 
         return Inertia::render('Dashboard', [
             'dailyLogDates' => $dailyLogDates,
             'dailyLogsByDate' => $dailyLogsByDate,
+            'dailyLogPrefill' => [
+                'time_in' => $defaultTimeIn ?? $lastLoggedTimes?->time_in,
+                'time_out' => $defaultTimeOut ?? $lastLoggedTimes?->time_out,
+                'source' => $prefillSource,
+            ],
+            'holidaysByDate' => $holidaysByDate,
             'dashboardStats' => [
                 'totalHours' => round($totalHours, 1),
                 'requiredHours' => round($requiredHours, 1),
@@ -131,6 +185,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
                 'weeklyChange' => $weeklyChange,
                 'weeklyTrend' => $weeklyTrend,
                 'daysLeft' => $daysLeft,
+                'expectedFinishDate' => $expectedFinishDate,
             ],
         ]);
     })->name('dashboard');
