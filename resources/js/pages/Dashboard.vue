@@ -77,6 +77,8 @@ const page = usePage<{
 const selectedDate = ref<DateValue | undefined>();
 const selectedDateIso = ref('');
 const isDialogOpen = ref(false);
+const attendanceMode = ref<'present' | 'absent'>('present');
+const absentReason = ref('');
 
 const loggedDateSet = computed(() => {
     const directDates = page.props.dailyLogDates ?? [];
@@ -184,17 +186,39 @@ const isDateUnavailable = (day: DateValue) => {
     return isWeekend || isFuture;
 };
 
+const parseAbsentTasksDone = (tasksDone: string | null | undefined) => {
+    const normalized = (tasksDone ?? '').trim();
+    const matched = normalized.match(/^absent(?:\s*:\s*([\s\S]*))?$/i);
+
+    if (!matched) {
+        return { isAbsent: false, reason: '' };
+    }
+
+    return {
+        isAbsent: true,
+        reason: (matched[1] ?? '').trim(),
+    };
+};
+
+const buildAbsentTasksDone = (reason: string) => {
+    const normalizedReason = reason.trim();
+    return normalizedReason ? `Absent: ${normalizedReason}` : 'Absent';
+};
+
 watch(selectedDate, (value) => {
     if (!value) return;
 
     selectedDateIso.value = toIsoDate(value);
     const existingLog = localDailyLogsByDate.value[selectedDateIso.value];
+    const absentState = parseAbsentTasksDone(existingLog?.tasks_done ?? '');
 
     logForm.log_date = selectedDateIso.value;
     logForm.time_in = existingLog?.time_in ?? dailyLogPrefill.value.time_in ?? '';
     logForm.time_out = existingLog?.time_out ?? dailyLogPrefill.value.time_out ?? '';
-    logForm.tasks_done = existingLog?.tasks_done ?? '';
+    logForm.tasks_done = absentState.isAbsent ? '' : existingLog?.tasks_done ?? '';
     logForm.save_as_default = false;
+    attendanceMode.value = absentState.isAbsent ? 'absent' : 'present';
+    absentReason.value = absentState.reason;
     logForm.clearErrors();
     isDialogOpen.value = true;
 });
@@ -207,11 +231,15 @@ const saveDailyLog = () => {
         ? { ...localDailyLogsByDate.value[isoDate] }
         : null;
     const previousMarked = Boolean(localLoggedDates.value[isoDate]);
+    const tasksDonePayload =
+        attendanceMode.value === 'absent'
+            ? buildAbsentTasksDone(absentReason.value)
+            : logForm.tasks_done.trim();
 
     const optimisticLog: DailyLogDetails = {
-        time_in: logForm.time_in || null,
-        time_out: logForm.time_out || null,
-        tasks_done: logForm.tasks_done || null,
+        time_in: attendanceMode.value === 'absent' ? null : logForm.time_in || null,
+        time_out: attendanceMode.value === 'absent' ? null : logForm.time_out || null,
+        tasks_done: tasksDonePayload || null,
     };
 
     localDailyLogsByDate.value = {
@@ -226,29 +254,37 @@ const saveDailyLog = () => {
 
     isDialogOpen.value = false;
 
-    logForm.post('/daily-logs', {
-        preserveScroll: true,
-        onError: () => {
-            if (previousLog) {
-                localDailyLogsByDate.value = {
-                    ...localDailyLogsByDate.value,
-                    [isoDate]: previousLog,
-                };
-            } else {
-                const nextLogs = { ...localDailyLogsByDate.value };
-                delete nextLogs[isoDate];
-                localDailyLogsByDate.value = nextLogs;
-            }
+    logForm
+        .transform((data) => ({
+            ...data,
+            time_in: attendanceMode.value === 'absent' ? '' : data.time_in,
+            time_out: attendanceMode.value === 'absent' ? '' : data.time_out,
+            tasks_done: tasksDonePayload,
+            save_as_default: attendanceMode.value === 'absent' ? false : data.save_as_default,
+        }))
+        .post('/daily-logs', {
+            preserveScroll: true,
+            onError: () => {
+                if (previousLog) {
+                    localDailyLogsByDate.value = {
+                        ...localDailyLogsByDate.value,
+                        [isoDate]: previousLog,
+                    };
+                } else {
+                    const nextLogs = { ...localDailyLogsByDate.value };
+                    delete nextLogs[isoDate];
+                    localDailyLogsByDate.value = nextLogs;
+                }
 
-            if (!previousMarked) {
-                const nextMarks = { ...localLoggedDates.value };
-                delete nextMarks[isoDate];
-                localLoggedDates.value = nextMarks;
-            }
+                if (!previousMarked) {
+                    const nextMarks = { ...localLoggedDates.value };
+                    delete nextMarks[isoDate];
+                    localLoggedDates.value = nextMarks;
+                }
 
-            isDialogOpen.value = true;
-        },
-    });
+                isDialogOpen.value = true;
+            },
+        });
 };
 </script>
 
@@ -369,7 +405,31 @@ const saveDailyLog = () => {
                 <form class="space-y-4" @submit.prevent="saveDailyLog">
                     <input type="hidden" name="log_date" :value="selectedDateIso" />
 
-                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div class="space-y-2">
+                        <Label>Attendance</Label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="flex cursor-pointer items-center gap-2 rounded border-2 border-input px-3 py-2 text-sm">
+                                <input
+                                    v-model="attendanceMode"
+                                    type="radio"
+                                    value="present"
+                                    class="h-4 w-4 border-input"
+                                />
+                                Present
+                            </label>
+                            <label class="flex cursor-pointer items-center gap-2 rounded border-2 border-input px-3 py-2 text-sm">
+                                <input
+                                    v-model="attendanceMode"
+                                    type="radio"
+                                    value="absent"
+                                    class="h-4 w-4 border-input"
+                                />
+                                Absent
+                            </label>
+                        </div>
+                    </div>
+
+                    <div v-if="attendanceMode === 'present'" class="grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div class="space-y-2">
                             <Label for="time_in">Time In</Label>
                             <Input id="time_in" v-model="logForm.time_in" type="time" />
@@ -383,12 +443,12 @@ const saveDailyLog = () => {
                         </div>
                     </div>
 
-                    <p v-if="!localDailyLogsByDate[selectedDateIso] && dailyLogPrefill.source" class="text-xs text-muted-foreground">
+                    <p v-if="attendanceMode === 'present' && !localDailyLogsByDate[selectedDateIso] && dailyLogPrefill.source" class="text-xs text-muted-foreground">
                         {{ dailyLogPrefill.source === 'default' ? 'Autofilled from your default schedule.' : 'Autofilled from your previous log.' }}
                         You can still edit before saving.
                     </p>
 
-                    <label class="flex items-center gap-2 text-sm">
+                    <label v-if="attendanceMode === 'present'" class="flex items-center gap-2 text-sm">
                         <input
                             v-model="logForm.save_as_default"
                             type="checkbox"
@@ -396,9 +456,9 @@ const saveDailyLog = () => {
                         />
                         Save current time in and out as my default
                     </label>
-                    <InputError :message="logForm.errors.save_as_default" />
+                    <InputError v-if="attendanceMode === 'present'" :message="logForm.errors.save_as_default" />
 
-                    <div class="space-y-2">
+                    <div v-if="attendanceMode === 'present'" class="space-y-2">
                         <Label for="tasks_done">What did you do today?</Label>
                         <textarea
                             id="tasks_done"
@@ -408,6 +468,20 @@ const saveDailyLog = () => {
                             placeholder="Describe your tasks, progress, blockers, and output..."
                         />
                         <InputError :message="logForm.errors.tasks_done" />
+                    </div>
+
+                    <div v-else class="space-y-2">
+                        <Label for="absent_reason">Reason for absence (optional)</Label>
+                        <textarea
+                            id="absent_reason"
+                            v-model="absentReason"
+                            rows="4"
+                            class="flex w-full border-3 border-input bg-background px-4 py-3 text-sm shadow-[4px_4px_0px_hsl(var(--shadow-color))] transition-all duration-200 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:translate-x-[4px] focus-visible:translate-y-[4px] focus-visible:shadow-none"
+                            placeholder="Ex. Sick leave, emergency, approved holiday work suspension"
+                        />
+                        <p class="text-xs text-muted-foreground">
+                            This will be saved in tasks done.
+                        </p>
                     </div>
                 </form>
 

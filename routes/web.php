@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\OnboardingController;
 use App\Http\Controllers\DailyLogController;
+use App\Http\Controllers\WeeklyReportController;
 use App\Models\DailyLog;
 use App\Services\PhilippineHolidayService;
 use Carbon\Carbon;
@@ -189,6 +190,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
             ],
         ]);
     })->name('dashboard');
+
+    Route::get('weekly-reports', [WeeklyReportController::class, 'index'])->name('weekly-reports.index');
+    Route::get('weekly-reports/export', [WeeklyReportController::class, 'export'])->name('weekly-reports.export');
 });
 
 require __DIR__.'/settings.php';

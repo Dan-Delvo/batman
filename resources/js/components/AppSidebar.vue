@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Link } from '@inertiajs/vue3';
-import { LayoutGrid, Settings } from 'lucide-vue-next';
+import { CalendarDays, LayoutGrid, Settings } from 'lucide-vue-next';
 import AppLogo from '@/components/AppLogo.vue';
 import NavMain from '@/components/NavMain.vue';
 import NavUser from '@/components/NavUser.vue';
@@ -24,10 +24,16 @@ const mainNavItems: NavItem[] = [
         icon: LayoutGrid,
     },
     {
+        title: 'Weekly Reports',
+        href: '/weekly-reports',
+        icon: CalendarDays,
+    },
+    {
         title: 'Settings',
         href: profileSettings(),
         icon: Settings,
     },
+
 ];
 </script>
 
