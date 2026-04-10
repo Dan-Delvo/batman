@@ -35,7 +35,7 @@ RUN touch database/database.sqlite && \
     export DB_DATABASE=/app/database/database.sqlite && \
     export APP_KEY=base64:$(php -r "echo base64_encode(random_bytes(32));") && \
     php artisan migrate --force && \
-    && php artisan db:seed --force
+    && php artisan db:seed --force && \
     yarn install && \
     yarn build && \
     rm database/database.sqlite
