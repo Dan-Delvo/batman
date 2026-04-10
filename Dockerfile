@@ -35,11 +35,11 @@ RUN touch database/database.sqlite && \
     export DB_DATABASE=/app/database/database.sqlite && \
     export APP_KEY=base64:$(php -r "echo base64_encode(random_bytes(32));") && \
     php artisan migrate --force && \
-    && php artisan db:seed --force && \
+    php artisan db:seed --force && \
     yarn install && \
     yarn build && \
     rm database/database.sqlite
-
+    
 # Stage 2: Production
 FROM webdevops/php-apache:8.3-alpine
 WORKDIR /app
