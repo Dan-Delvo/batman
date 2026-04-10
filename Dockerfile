@@ -1,7 +1,7 @@
 # Stage 1: Build assets
 FROM node:22-alpine AS build
 
-# 1. Install PHP 8.3 + EVERY extension Laravel/Composer needs
+# Install PHP 8.3 + core extensions
 RUN apk add --no-cache \
     php83 \
     php83-cli \
@@ -16,21 +16,19 @@ RUN apk add --no-cache \
     php83-fileinfo \
     php83-ctype \
     php83-xmlwriter \
-    php83-tokenizer \
     composer
 
-# Force 'php' and 'composer' to use 8.3 specifically
 RUN ln -sf /usr/bin/php83 /usr/bin/php
 
 WORKDIR /app
 COPY . .
 
-# 2. Install PHP dependencies 
-# We add --ignore-platform-reqs just to be safe during the build-only stage
+# Install PHP dependencies without running Laravel's post-install hooks
 RUN composer install --no-dev --no-scripts --no-autoloader --ignore-platform-reqs
-RUN composer dump-autoload --no-dev --optimize
+# CRITICAL: Add --no-scripts here to bypass the PDO check
+RUN composer dump-autoload --no-dev --optimize --no-scripts
 
-# 3. Build JS assets
+# Build JS assets
 RUN yarn install && yarn build
 
 # Stage 2: Production
